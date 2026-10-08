@@ -8,7 +8,7 @@ public class PathResolver {
             return null;
         }
 
-        if (!requestPath.startsWith("/")) {
+        if (!requestPath.startsWith("/") || requestPath.indexOf('\0') >= 0) {
             return null;
         }
 
@@ -25,7 +25,7 @@ public class PathResolver {
             }
 
             return target;
-        } catch (IOException e) {
+        } catch (Exception e) {
             return null;
         }
     }

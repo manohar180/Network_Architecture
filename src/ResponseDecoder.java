@@ -31,6 +31,9 @@ public class ResponseDecoder {
             }
 
             if (frame.getHeader().getType() == FrameType.RESPONSE) {
+                if (frame.getHeader().getStreamId() <= 0) {
+                    throw new IOException("Invalid stream ID in RESPONSE frame: " + frame.getHeader().getStreamId());
+                }
                 responseFrame = frame;
                 break;
             } else {
@@ -75,6 +78,9 @@ public class ResponseDecoder {
 
                 byte type = frame.getHeader().getType();
                 if (type == FrameType.DATA) {
+                    if (frame.getHeader().getStreamId() != responseFrame.getHeader().getStreamId()) {
+                        throw new IOException("Stream ID mismatch in DATA frame");
+                    }
                     bodyStream.write(frame.getPayload());
                     if (frame.getHeader().hasFlag(Protocol.FLAG_END_STREAM)) {
                         break;

@@ -7,6 +7,31 @@ Communication occurs using custom binary frames over a single persistent TCP con
 
 ---
 
+## Architecture Diagram & Flow
+
+```text
+[ BcurlClient ]                                       [ ObserveServer ]
+       |                                                      |
+       |  ========= 1. TCP Connection (Port 9000) =========   |
+       |----------------------------------------------------->| (Worker Thread)
+       |                                                      |
+       |  -- 2. REQUEST Frame (Stream 1, END_STREAM=1) -----> |
+       |     [9-byte Header | Version, Method, Path, Headers] |
+       |                                                      | Path Validation &
+       |                                                      | FileServer Lookup
+       |  <-- 3. RESPONSE Frame (Stream 1, END_STREAM=0) ---- |
+       |     [9-byte Header | Version, Status, Headers]       |
+       |                                                      |
+       |  <-- 4. DATA Frame Chunk 1 (16 KB, END_STREAM=0) --- |
+       |  <-- 5. DATA Frame Chunk 2 (Final, END_STREAM=1) --- |
+       |                                                      |
+       |  ==== 6. Connection Kept Alive for Next Request ==== |
+       |  -- 7. Sequential REQUEST on Same Socket ----------> |
+       v                                                      v
+```
+
+---
+
 ## Architecture & Design
 - **Transport:** Raw TCP sockets (`java.net.ServerSocket` and `java.net.Socket`).
 - **Framing:** Fixed 9-byte header (`24-bit length | 8-bit type | 8-bit flags | 31-bit stream ID`).
@@ -14,6 +39,7 @@ Communication occurs using custom binary frames over a single persistent TCP con
 - **Concurrency:** Thread-per-connection concurrency model on the server.
 - **Connection Management:** Persistent TCP connection; the server keeps the socket open and serves sequential requests without reconnecting.
 - **Path Security:** Normalizes paths and ensures requests remain strictly inside the document root (`./www`), returning `400 Bad Request` on path traversal attempts.
+- **DATA Chunking:** Large bodies exceeding `16,384` bytes are chunked into consecutive `DATA` frames. The final frame asserts `END_STREAM = 0x01`.
 
 ---
 
@@ -31,6 +57,7 @@ Communication occurs using custom binary frames over a single persistent TCP con
 NetworkArchitectureProject/
 |-- README.md
 |-- SPEC.md
+|-- TESTING.md
 |-- .gitignore
 |-- observe
 |-- bcurl
@@ -53,10 +80,12 @@ NetworkArchitectureProject/
 |   |-- FileServer.java
 |   |-- PathResolver.java
 |   |-- HexDump.java
+|   |-- TestRunner.java
 |-- www/
 |   |-- index.html
 |   |-- hello.txt
 |   |-- test.html
+|   |-- large.txt
 |-- examples/
 |   |-- annotated-hexdump.md
 |-- scripts/
@@ -126,7 +155,19 @@ Exit code: `0`.
 ```
 Exit code: `1`.
 
-### 3. Verbose Frame Hexdump Mode
+### 3. Persistent Connection Demo (Multiple Sequential Requests)
+`BcurlClient` can send multiple sequential requests across the same socket without reconnecting:
+```bash
+./bcurl localhost:9000/hello.txt /test.html
+```
+
+### 4. Large Response (DATA Frame Chunking)
+```bash
+./bcurl -v localhost:9000/large.txt
+```
+Demonstrates chunked `DATA` frame delivery where the final chunk sets `END_STREAM`.
+
+### 5. Verbose Frame Hexdump Mode
 ```bash
 ./bcurl -v localhost:9000/index.html
 ```
@@ -134,15 +175,25 @@ Displays full hexadecimal frame inspection of the `REQUEST`, `RESPONSE`, and `DA
 
 ---
 
-## Verification & Testing
-The implementation was verified against the following tests:
-1. Java compilation with standard `javac`.
-2. Clean request/response serving of HTML and plain text files.
-3. Proper 404 response and non-zero exit codes for nonexistent files.
-4. Path traversal prevention (rejecting `/../secret.txt`).
-5. Tolerance and skipping of unknown frame types without crashing.
-6. Persistent TCP connections handling multiple requests sequentially.
-7. Hexadecimal frame dumping and verification against the protocol specification.
+## Security & Path Traversal Handling
+All incoming paths are normalized and resolved to canonical paths relative to the document root (`./www`). Requests attempting to escape via `..` or null bytes (`\0`) are intercepted by `PathResolver` and rejected with `400 Bad Request`.
+
+---
+
+## Automated Test Suite
+Run the built-in, standalone test suite:
+```bash
+java -cp out TestRunner
+```
+Covers all 12 core test scenarios: normal 200, 404, truncated frames, reserved bit checks, invalid UTF-8, path traversal, Content-Length checks, unknown frames, multi-chunk DATA, persistent sequential connections, and simultaneous concurrent clients.
+
+---
+
+## Design Decisions & Limitations
+- **Synchronous Streams:** Stream ID 1 is used for synchronous request/response pairs on a connection. Multiplexing across concurrent stream IDs is reserved for future revisions.
+- **Strict Parsing:** Protocol fields (method, path, headers) enforce strict UTF-8 decoding (`CodingErrorAction.REPORT`) to prevent character substitution vulnerabilities.
+- **Direct Unknown Frame Skipping:** Unknown frame types have their headers parsed and payloads consumed directly from the socket stream without heap allocation.
+- **Clean Standard Library:** Built exclusively on plain Java SE standard library sockets and streams without third-party frameworks.
 
 ---
 
