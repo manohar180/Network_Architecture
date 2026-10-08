@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -d "$BASE_DIR/out" ] || [ ! -f "$BASE_DIR/out/ObserveServer.class" ]; then
+    mkdir -p "$BASE_DIR/out"
+    javac -d "$BASE_DIR/out" "$BASE_DIR"/src/*.java
+fi
+exec java -cp "$BASE_DIR/out" ObserveServer "$@"
