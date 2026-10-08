@@ -39,9 +39,9 @@ public class ObserveServer {
              OutputStream out = socket.getOutputStream()) {
 
             while (!socket.isClosed()) {
-                Frame frame;
+                FrameHeader header;
                 try {
-                    frame = Frame.read(in);
+                    header = FrameHeader.read(in);
                 } catch (IOException e) {
                     try {
                         Response err = FileServer.errorResponse(400, "400 Bad Request: Malformed Frame\n");
@@ -55,15 +55,36 @@ public class ObserveServer {
                     break;
                 }
 
-                if (frame == null) {
+                if (header == null) {
+                    break;
+                }
+
+                if (!FrameType.isKnown(header.getType())) {
+                    try {
+                        Frame.skipPayload(in, header.getPayloadLength());
+                    } catch (IOException e) {
+                        break;
+                    }
+                    continue;
+                }
+
+                Frame frame;
+                try {
+                    frame = readFramePayload(in, header);
+                } catch (IOException e) {
+                    try {
+                        Response err = FileServer.errorResponse(400, "400 Bad Request: Malformed Payload\n");
+                        List<Frame> errFrames = ResponseEncoder.encode(err, header.getStreamId());
+                        for (Frame f : errFrames) {
+                            f.write(out);
+                        }
+                        out.flush();
+                    } catch (IOException ignored) {
+                    }
                     break;
                 }
 
                 byte type = frame.getHeader().getType();
-                if (!FrameType.isKnown(type)) {
-                    continue;
-                }
-
                 if (type != FrameType.REQUEST) {
                     Response err = FileServer.errorResponse(400, "400 Bad Request: Expected REQUEST Frame\n");
                     List<Frame> errFrames = ResponseEncoder.encode(err, frame.getHeader().getStreamId());
@@ -102,6 +123,19 @@ public class ObserveServer {
             }
         } catch (IOException ignored) {
         }
+    }
+
+    private static Frame readFramePayload(InputStream in, FrameHeader header) throws IOException {
+        byte[] payload = new byte[header.getPayloadLength()];
+        int read = 0;
+        while (read < header.getPayloadLength()) {
+            int n = in.read(payload, read, header.getPayloadLength() - read);
+            if (n == -1) {
+                throw new IOException("Incomplete frame payload");
+            }
+            read += n;
+        }
+        return new Frame(header, payload);
     }
 
     public static void main(String[] args) {

@@ -15,11 +15,17 @@ public class ResponseDecoder {
         Frame responseFrame = null;
 
         while (true) {
-            Frame frame = Frame.read(in);
-            if (frame == null) {
+            FrameHeader header = FrameHeader.read(in);
+            if (header == null) {
                 throw new IOException("Connection closed before RESPONSE frame");
             }
 
+            if (!FrameType.isKnown(header.getType())) {
+                Frame.skipPayload(in, header.getPayloadLength());
+                continue;
+            }
+
+            Frame frame = readPayload(in, header);
             if (frameListener != null) {
                 frameListener.accept(frame);
             }
@@ -27,8 +33,6 @@ public class ResponseDecoder {
             if (frame.getHeader().getType() == FrameType.RESPONSE) {
                 responseFrame = frame;
                 break;
-            } else if (!FrameType.isKnown(frame.getHeader().getType())) {
-                continue;
             } else {
                 throw new IOException("Unexpected known frame type before RESPONSE: " + frame.getHeader().getType());
             }
@@ -54,20 +58,22 @@ public class ResponseDecoder {
         ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
         if (!responseFrame.getHeader().hasFlag(Protocol.FLAG_END_STREAM)) {
             while (true) {
-                Frame frame = Frame.read(in);
-                if (frame == null) {
+                FrameHeader header = FrameHeader.read(in);
+                if (header == null) {
                     throw new IOException("Connection closed before stream ended");
                 }
 
+                if (!FrameType.isKnown(header.getType())) {
+                    Frame.skipPayload(in, header.getPayloadLength());
+                    continue;
+                }
+
+                Frame frame = readPayload(in, header);
                 if (frameListener != null) {
                     frameListener.accept(frame);
                 }
 
                 byte type = frame.getHeader().getType();
-                if (!FrameType.isKnown(type)) {
-                    continue;
-                }
-
                 if (type == FrameType.DATA) {
                     bodyStream.write(frame.getPayload());
                     if (frame.getHeader().hasFlag(Protocol.FLAG_END_STREAM)) {
@@ -79,6 +85,34 @@ public class ResponseDecoder {
             }
         }
 
-        return new Response(statusCode, headers, bodyStream.toByteArray());
+        byte[] body = bodyStream.toByteArray();
+        Response response = new Response(statusCode, headers, body);
+
+        String clValue = response.getHeaderValue("content-length");
+        if (clValue != null) {
+            try {
+                long expectedLength = Long.parseLong(clValue.trim());
+                if (body.length != expectedLength) {
+                    throw new IOException("Content-Length mismatch: expected " + expectedLength + " bytes, received " + body.length);
+                }
+            } catch (NumberFormatException e) {
+                throw new IOException("Invalid Content-Length header value: " + clValue);
+            }
+        }
+
+        return response;
+    }
+
+    private static Frame readPayload(InputStream in, FrameHeader header) throws IOException {
+        byte[] payload = new byte[header.getPayloadLength()];
+        int read = 0;
+        while (read < header.getPayloadLength()) {
+            int n = in.read(payload, read, header.getPayloadLength() - read);
+            if (n == -1) {
+                throw new IOException("Incomplete frame payload");
+            }
+            read += n;
+        }
+        return new Frame(header, payload);
     }
 }

@@ -1,5 +1,8 @@
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
@@ -26,7 +29,7 @@ public class RequestDecoder {
             throw new IOException("Missing method length");
         }
         byte[] methodBytes = readExact(bais, methodLen);
-        String method = new String(methodBytes, StandardCharsets.UTF_8);
+        String method = decodeUtf8(methodBytes);
 
         if (!"GET".equalsIgnoreCase(method)) {
             throw new IOException("Unsupported HTTP method: " + method);
@@ -43,7 +46,7 @@ public class RequestDecoder {
         }
 
         byte[] pathBytes = readExact(bais, pathLen);
-        String path = new String(pathBytes, StandardCharsets.UTF_8);
+        String path = decodeUtf8(pathBytes);
 
         if (!path.startsWith("/")) {
             throw new IOException("Path must begin with '/'");
@@ -51,7 +54,22 @@ public class RequestDecoder {
 
         List<Header> headers = HeaderCodec.decode(bais);
 
+        if (bais.available() > 0) {
+            throw new IOException("Trailing bytes in request payload");
+        }
+
         return new Request(method, path, headers);
+    }
+
+    private static String decodeUtf8(byte[] bytes) throws IOException {
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException e) {
+            throw new IOException("Malformed UTF-8 encoding in request: " + e.getMessage(), e);
+        }
     }
 
     private static byte[] readExact(ByteArrayInputStream in, int length) throws IOException {

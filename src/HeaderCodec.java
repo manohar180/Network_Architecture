@@ -3,6 +3,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,14 +71,14 @@ public class HeaderCodec {
                 String name = HeaderTable.getName(marker);
                 int valLen = readUInt16(in);
                 byte[] valBytes = readExact(in, valLen);
-                headers.add(new Header(name, new String(valBytes, StandardCharsets.UTF_8)));
+                headers.add(new Header(name, decodeUtf8(valBytes)));
             } else if (marker == 0) {
                 int nameLen = readUInt16(in);
                 byte[] nameBytes = readExact(in, nameLen);
                 int valLen = readUInt16(in);
                 byte[] valBytes = readExact(in, valLen);
-                String name = new String(nameBytes, StandardCharsets.UTF_8);
-                String val = new String(valBytes, StandardCharsets.UTF_8);
+                String name = decodeUtf8(nameBytes);
+                String val = decodeUtf8(valBytes);
                 headers.add(new Header(name, val));
             } else {
                 throw new IOException("Invalid header marker byte: " + marker);
@@ -83,6 +86,17 @@ public class HeaderCodec {
         }
 
         return headers;
+    }
+
+    private static String decodeUtf8(byte[] bytes) throws IOException {
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException e) {
+            throw new IOException("Malformed UTF-8 encoding in header: " + e.getMessage(), e);
+        }
     }
 
     private static void writeUInt16(OutputStream out, int value) throws IOException {

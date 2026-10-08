@@ -9,6 +9,12 @@ public class FrameHeader {
     private final int streamId;
 
     public FrameHeader(int payloadLength, byte type, byte flags, int streamId) {
+        if (payloadLength < 0 || payloadLength > Protocol.MAX_FRAME_PAYLOAD) {
+            throw new IllegalArgumentException("Payload length out of range: " + payloadLength);
+        }
+        if (streamId < 0 || (streamId & 0x80000000) != 0) {
+            throw new IllegalArgumentException("Invalid stream ID: " + streamId);
+        }
         this.payloadLength = payloadLength;
         this.type = type;
         this.flags = flags;
